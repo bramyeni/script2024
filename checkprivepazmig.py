@@ -1,14 +1,18 @@
 #!/bin/env python3
 import sys
 import os
-from azure.cli.core import get_default_cli
 import json
 import re
 import jmespath
 import subprocess
 import socket
-import dns.resolver
 import argparse
+try:
+    from azure.cli.core import get_default_cli
+except (ImportError,ModuleNotFoundError):
+    print("Missing dependency azure.cli, use pip install azure.cli")
+    sys.exit(2)
+
 
 LOCATION="australiaeast"
 RESOURCEGROUP="RG-EMEA-Brampahlawanto-DBeam"
@@ -174,22 +178,34 @@ for privdns in privdnsall:
         out=re.findall('.*IN A.*',fline)
         if (out!=[] and out!=""):
             allentries.append(out[0]+" "+privdns['name'])
+    if flines: flines.close()
 
 print("\nThe following is the list of private domain name and its IP address")
 
-res = dns.resolver.Resolver()
-if (DNSSERVER!=""):
-   res.nameservers = [ DNSSERVER ]
+if (os.getenv('AZUREPS_HOST_ENVIRONMENT')==None):
+    import dns.resolver
+    res = dns.resolver.Resolver()
+    if (DNSSERVER!=""):
+       res.nameservers = [ DNSSERVER ]
+    else:
+       DNSSERVER=res.nameservers[0]
 else:
-   DNSSERVER=res.nameservers[0]
+    CSHELL=1
+    dnsfromfile=open('/etc/resolv.conf','rt')
+    dnsline=re.findall('(?<=nameserver ).*',dnsfromfile.read())
+    if (dnsline!=[]): DNSSERVER=dnsline[0]
+    dnsfromfile.close()
 
 for dnsentry in allentries:
     domainname=dnsentry.split()[0]+"."+dnsentry.split()[-1]
     ipaddr=dnsentry.split()[-2]
     try:
-        r = res.resolve(domainname,"A")
-        if (r!=[]):
-            realaddr=r[0]
+        if (CSHELL==1):    
+           realaddr=socket.gethostbyname(domainname)
+        else:
+           r = res.resolve(domainname,"A")
+           if (r!=[]):
+              realaddr=r[0]
         print("%-100s %s => %s (DNS=%s)" % (domainname,ipaddr,realaddr,DNSSERVER))
     except Exception as e:
         print("%-100s %s => %s (DNS=%s)" % (domainname,ipaddr,'None',DNSSERVER))
