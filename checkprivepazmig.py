@@ -28,9 +28,11 @@ if (PLATFORM=="win32"):
 
     tempdir="c:\\users\\public\\"
     rsclist=tempdir+"allrsclist.out"
+    SHELL=True
 else:
     tempdir="/tmp/"
     rsclist=tempdir+'allrsclist.out'
+    SHELL=False
 
 def install_extension(extensions):
     data=run_azcli("extension list")
@@ -48,7 +50,7 @@ def install_extension(extensions):
 
 def run_az(argsstr):
    args=("az "+argsstr).split() 
-   process = subprocess.Popen(args, stdout=subprocess.PIPE, shell=True)
+   process = subprocess.Popen(args, stdout=subprocess.PIPE, shell=SHELL)
    out, err = process.communicate()
    if (err==None):
       return(err)
