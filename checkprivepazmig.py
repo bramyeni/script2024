@@ -13,17 +13,30 @@ except (ImportError,ModuleNotFoundError):
     print("Missing dependency azure.cli, use pip install azure.cli")
     sys.exit(2)
 
+PLATFORM=sys.platform
 
 LOCATION="australiaeast"
 RESOURCEGROUP="RG-EMEA-Brampahlawanto-DBeam"
-rsclist='/tmp/allrsclist.out'
 DNSSERVER="192.168.0.153"
+
+if (PLATFORM=="win32"):
+    try:
+        import dns.resolver
+    except (ImportError,ModuleNotFoundError):
+         print("Missing dependency dns.resolver, use pip install dnspython")
+         sys.exit(2)
+
+    tempdir="c:\\users\\public\\"
+    rsclist=tempdir+"allrsclist.out"
+else:
+    tempdir="/tmp/"
+    rsclist=tempdir+'allrsclist.out'
 
 def install_extension(extensions):
     data=run_azcli("extension list")
     for extension in extensions:
         azext=jmespath.search("[?contains(name,'"+extension+"')].{name:name}",data)
-        if (azext==[]):
+        if (azext==[] or azext==None):
             print("installing extension "+extension)
             out=run_azcli("extension add --name "+extension)
             if (out!=None):
@@ -35,7 +48,7 @@ def install_extension(extensions):
 
 def run_az(argsstr):
    args=("az "+argsstr).split() 
-   process = subprocess.Popen(args, stdout=subprocess.PIPE)
+   process = subprocess.Popen(args, stdout=subprocess.PIPE, shell=True)
    out, err = process.communicate()
    if (err==None):
       return(err)
@@ -96,6 +109,10 @@ def check_output(output,skip=0):
         print("No output..")
         if (skip==0):
            sys.exit()
+        else:
+           return(1)
+    else:
+        return(0)
 
 def check_port(host,port):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -171,7 +188,7 @@ allentries=[]
 for privdns in privdnsall:
     print("- %s" % privdns['name'])
     print("  %s" % privdns['id'])
-    TMPFILE="/tmp/"+privdns['name']+".tmp"
+    TMPFILE=tempdir+privdns['name']+".tmp"
     out=run_az("network private-dns zone export --name "+privdns['name']+" -g "+RESOURCEGROUP+" -o none -f "+TMPFILE)
     flines=open(TMPFILE,'rt')
     for fline in flines:
@@ -189,12 +206,14 @@ if (os.getenv('AZUREPS_HOST_ENVIRONMENT')==None):
        res.nameservers = [ DNSSERVER ]
     else:
        DNSSERVER=res.nameservers[0]
+    CSHELL=0
 else:
     CSHELL=1
     dnsfromfile=open('/etc/resolv.conf','rt')
     dnsline=re.findall('(?<=nameserver ).*',dnsfromfile.read())
     if (dnsline!=[]): DNSSERVER=dnsline[0]
     dnsfromfile.close()
+
 
 for dnsentry in allentries:
     domainname=dnsentry.split()[0]+"."+dnsentry.split()[-1]
@@ -209,6 +228,7 @@ for dnsentry in allentries:
         print("%-100s %s => %s (DNS=%s)" % (domainname,ipaddr,realaddr,DNSSERVER))
     except Exception as e:
         print("%-100s %s => %s (DNS=%s)" % (domainname,ipaddr,'None',DNSSERVER))
+        print(e)
 
        
 print("\nNOTE: \n- A => B must match, otherwise dns resolver or conditional forwarder setup was wrong")
@@ -298,6 +318,47 @@ for ruleset in rulesets:
             print("Target Port          : %s" % targetdns['port'])
 
 
+print("\nList of the storage accoutn that is used by this "+azmigname+" Project")
+data=run_azcli("storage account list -g "+RESOURCEGROUP)
+azstorids=jmespath.search("[?tags.\"Migrate Project\"=='"+azmigname+"'].id",data)
+check_output(azstorids)
+
+for azstorid in azstorids:
+    data=run_azcli("resource show -g "+RESOURCEGROUP+" --ids "+azstorid)
+    azstoracc=jmespath.search("{kind:kind,name:name,skuname:sku.name}",data)
+    check_output(azstoracc)
+    print("Name                  : %s" % azstoracc['name'])
+    print("Kind                  : %s" % azstoracc['kind'])
+    print("SKU name              : %s" % azstoracc['skuname'])
+
+    azstoraccprop=jmespath.search("properties.{tier:accessTier,public:allowBlobPublicAccess,TLS:minimumTlsVersion,blob:primaryEndpoints.blob,acldefault:networkAcls.defaultAction,netaclbypass:networkAcls.bypass}",data)
+
+    if (check_output(azstoraccprop,1)==0):
+        print("\nStorage Properties")
+        print("Tier                  : %s" % azstoraccprop['tier'])
+        print("Public Access         : %s" % azstoraccprop['public'])
+        print("Minimum TLS version   : %s" % azstoraccprop['TLS'])
+        print("blob endpoint         : %s" % azstoraccprop['blob'])
+        print("Net ACL default action: %s" % azstoraccprop['acldefault'])
+        print("Net ACL bypass        : %s" % azstoraccprop['netaclbypass'])
+
+    azstoraccenc=jmespath.search("properties.encryption.{keysource:keySource,svcblob:services.blob.enabled,svcblobkeytype:services.blob.keyType}",data)
+    if (check_output(azstoraccenc,1)==0):
+        print("\nEncryption")
+        print("Key Source            : %s" % azstoraccenc['keysource'])
+        print("Services blob         : %s" % azstoraccenc['svcblob'])
+        print("Services blob key Type: %s" % azstoraccenc['svcblobkeytype'])
+
+    azstorpriveps=jmespath.search("properties.privateEndpointConnections[].{id:id,name:name,privepid:properties.privateEndpoint.id,privlinkstat:properties.privateLinkServiceConnectionState.status,provstate:properties.provisioningState}",data)
+    if (check_output(azstorpriveps,1)==0):
+       print("\nStorage Private Endpoint")
+       for azstorprivep in azstorpriveps:
+           print("ID                    : %s" % azstorprivep['id'])
+           print("Name                  : %s" % azstorprivep['name'])
+           print("Network Priv endpoint : %s" % azstorprivep['privepid'])
+           print("Priv Link conn status : %s" % azstorprivep['privlinkstat'])
+           print("Provisioning State    : %s" % azstorprivep['provstate'])
+           print("\n")
 
 
 
